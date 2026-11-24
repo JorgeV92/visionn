@@ -175,3 +175,188 @@ Takeaways:
 - Classical edge detectors remain valuable baselines and diagnostic tools.
 
 Further reading: Szeliski’s free textbook, [Computer Vision: Algorithms and Applications](https://szeliski.org/Book/), Chapters 3–4.
+
+## Pinhole Cameras, Projection, and Calibration 
+
+This builds on image gradients: after extracting image structure, geometry tells us how a 3D scene produced those pixels.
+
+### Concepts and mathematics 
+
+A 3D point in camera coordinates $X_c = (X,Y,Z)^T$ projects to normalized image coordinates:
+
+$$
+x = \frac{X}{Z}, \qquad y = \frac{Y}{Z}
+$$
+
+The camera intrinsic matrix maps normalized coordinates to pixels:
+
+$$
+K =
+\begin{bmatrix}
+f_x & s & c_x\\
+0 & f_y & c_y\\
+0 & 0 & 1
+\end{bmatrix}
+$$
+
+With camera pose $R,t$, the complete projective camera is:
+
+$$
+\tilde p \sim K[R \mid t]\tilde X = P\tilde X
+$$
+
+where $\tilde X=(X,Y,Z,1)^T$ and $\tilde p=(u,v,w)^T$. Convert back to pixels using:
+
+$$
+u = \frac{\tilde p_1}{\tilde p_3}, \qquad
+v = \frac{\tilde p_2}{\tilde p_3}
+$$
+
+Important intuition:
+
+- $K$: camera’s internal pixel geometry.
+- $R,t$: where the camera is and where it points.
+- Perspective division causes distant objects to appear smaller.
+- A single image loses absolute depth: many 3D points along the same camera ray yield the same pixel.
+
+For autonomous driving, calibration errors create systematic projection errors between cameras, LiDAR, HD maps, and detected objects.
+
+### Paper and technical resource 
+
+- **Paper — peer-reviewed:** Zhengyou Zhang, “[A Flexible New Technique for Camera Calibration](https://www.microsoft.com/en-us/research/publication/a-flexible-new-technique-for-camera-calibration/)” (IEEE TPAMI, 2000). It estimates camera intrinsics from several images of a planar calibration pattern, then refines them with nonlinear optimization and models radial distortion. [microsoft.com](https://www.microsoft.com/en-us/research/publication/a-flexible-new-technique-for-camera-calibration/?utm_source=chatgpt.com)
+
+- **Technical resource:** Stanford CS231A, “[Camera Models](https://web.stanford.edu/class/archive/cs/cs231a/cs231a.1246/course_notes/01-camera-models.pdf).” Read Sections 2–4 on pinhole cameras, homogeneous coordinates, intrinsics, and extrinsics. [web.stanford.edu](https://web.stanford.edu/class/archive/cs/cs231a/cs231a.1246/course_notes/01-camera-models.pdf?utm_source=chatgpt.com)
+
+Prerequisites: matrix multiplication, linear systems, SVD at a high level, and homogeneous coordinates.
+
+### Practical implementation
+
+Implement projection and a Direct Linear Transform (DLT) camera estimator in PyTorch. This uses synthetic points, so it runs comfortably on your Mac.
+
+Create `camera.py`:
+
+```python
+import torch
+
+def homogenize(points: torch.Tensor) -> torch.Tensor:
+    """Convert [N, D] Euclidean points to [N, D+1] homogeneous points."""
+    # TODO
+    raise NotImplementedError
+
+def dehomogenize(points: torch.Tensor) -> torch.Tensor:
+    """Convert [N, D+1] homogeneous points to [N, D]."""
+    # TODO: divide every coordinate except the final one by final coordinate.
+    raise NotImplementedError
+
+def project(P: torch.Tensor, points_3d: torch.Tensor) -> torch.Tensor:
+    """
+    Project [N, 3] world points using a [3, 4] camera matrix.
+    Return pixel coordinates [N, 2].
+    """
+    # TODO
+    raise NotImplementedError
+
+def estimate_camera_dlt(
+    points_3d: torch.Tensor,
+    points_2d: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Estimate P [3, 4] from N >= 6 non-coplanar 3D-to-2D correspondences.
+
+    Build the homogeneous linear system A p = 0, solve with SVD,
+    reshape its last right-singular vector into P, and normalize scale.
+    """
+    # TODO
+    raise NotImplementedError
+```
+
+Create `test_camera.py`:
+
+```python
+import torch
+from camera import homogenize, dehomogenize, project, estimate_camera_dlt
+
+P_TRUE = torch.tensor([
+    [800.0,   0.0, 320.0,  40.0],
+    [  0.0, 810.0, 240.0, -25.0],
+    [  0.0,   0.0,   1.0,   0.2],
+], dtype=torch.float64)
+
+POINTS_3D = torch.tensor([
+    [-1.0, -1.0, 4.0], [ 1.0, -1.0, 4.5],
+    [-1.0,  1.0, 5.0], [ 1.0,  1.0, 5.5],
+    [ 0.3, -0.7, 6.0], [-0.8,  0.4, 6.5],
+    [ 0.7,  0.2, 7.0], [-0.2, -0.4, 7.5],
+], dtype=torch.float64)
+
+def test_homogeneous_round_trip():
+    x = torch.tensor([[2.0, -3.0], [0.5, 4.0]])
+    assert torch.allclose(dehomogenize(homogenize(x)), x)
+
+def test_projection_returns_pixels():
+    pixels = project(P_TRUE, POINTS_3D)
+    assert pixels.shape == (8, 2)
+    assert torch.isfinite(pixels).all()
+
+def test_dlt_reprojects_training_points():
+    pixels = project(P_TRUE, POINTS_3D)
+    P_est = estimate_camera_dlt(POINTS_3D, pixels)
+    reprojection = project(P_est, POINTS_3D)
+
+    assert P_est.shape == (3, 4)
+    assert torch.allclose(reprojection, pixels, atol=1e-6)
+
+def test_dlt_generalizes_to_held_out_point():
+    pixels = project(P_TRUE, POINTS_3D)
+    P_est = estimate_camera_dlt(POINTS_3D, pixels)
+
+    held_out = torch.tensor([[0.25, -0.10, 6.25]], dtype=torch.float64)
+    assert torch.allclose(
+        project(P_est, held_out),
+        project(P_TRUE, held_out),
+        atol=1e-5,
+    )
+```
+
+Run:
+
+```bash
+python -m pytest -q
+```
+
+Debugging hints:
+
+- Keep all tensors `float64`; DLT can be numerically sensitive.
+- \(P\) is only defined up to nonzero scale. Test reprojections, not raw matrix equality.
+- Each 3D–2D correspondence contributes two rows to \(A\).
+- Do not use coplanar points for this version of DLT.
+
+Optional extension: add radial distortion,
+
+\[
+x_d = x(1 + k_1r^2 + k_2r^4), \quad
+y_d = y(1 + k_1r^2 + k_2r^4)
+\]
+
+then measure how an unmodeled distortion changes reprojection error.
+
+### Graduate-level questions 
+
+1. Why can’t a single calibrated image determine metric depth without additional assumptions or measurements?
+
+2. Derive why scaling \(P\) by any nonzero constant does not change projected pixel coordinates.
+
+3. A truck has a forward camera and roof LiDAR. What are the separate roles of camera intrinsics and camera-to-LiDAR extrinsics? Which errors cause a pixel-level misalignment that grows with distance?
+
+4. Why is estimating a camera matrix from noisy correspondences an optimization problem rather than an exact linear-algebra problem in practice?
+
+###  Review and progress tracking 
+
+Key takeaways:
+
+- Projection is linear in homogeneous coordinates, then nonlinear after perspective division.
+- \(P=K[R\mid t]\) separates internal camera geometry from pose.
+- Calibration is required before reliable metric reconstruction or sensor fusion.
+- DLT is a useful initialization, while real calibration needs normalization and nonlinear refinement.
+
+Further reading: Stanford’s [camera-calibration lecture](https://web.stanford.edu/class/cs231a/lectures_2025/lecture3_camera_calibration.pdf).
