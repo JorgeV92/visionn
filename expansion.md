@@ -333,10 +333,10 @@ Debugging hints:
 
 Optional extension: add radial distortion,
 
-\[
+$$
 x_d = x(1 + k_1r^2 + k_2r^4), \quad
 y_d = y(1 + k_1r^2 + k_2r^4)
-\]
+$$
 
 then measure how an unmodeled distortion changes reprojection error.
 
