@@ -360,3 +360,192 @@ Key takeaways:
 - DLT is a useful initialization, while real calibration needs normalization and nonlinear refinement.
 
 Further reading: Stanford’s [camera-calibration lecture](https://web.stanford.edu/class/cs231a/lectures_2025/lecture3_camera_calibration.pdf).
+
+
+
+
+## Epipolar Geometry and the Fundamental Matrix 
+
+This extends camera calibration to two views: calibration tells you how a camera projects; epipolar geometry constrains where a point from one camera may appear in another.
+
+### Part 1 — Concepts and mathematics (25 min)
+
+For a corresponding pair of homogeneous image points $\tilde x_1,\tilde x_2$,
+
+$$
+\tilde x_2^T F \tilde x_1 = 0
+$$
+
+where $F\in\mathbb{R}^{3\times3}$ is the **fundamental matrix**. Given a point in image 1, its match in image 2 must lie on the epipolar line:
+
+$$
+\ell_2 = F\tilde x_1
+$$
+
+If both cameras are calibrated, use the essential matrix:
+
+$$
+E = [t]_\times R,
+\qquad
+F = K_2^{-T} E K_1^{-1}
+$$
+
+where $[t]_\times$ is the skew-symmetric matrix representing cross products with translation $t$.
+
+Important facts:
+
+- $F$ has rank 2.
+- Epipolar geometry reduces 2D correspondence search to a 1D line search.
+- Pure rotation has degenerate translation geometry: no usable triangulation baseline.
+- This is central to stereo depth, visual odometry, SLAM initialization, and multi-camera calibration.
+
+### Paper and technical resource
+
+- **Paper — peer-reviewed:** Richard Hartley, “[In Defense of the Eight-Point Algorithm](https://users.cecs.anu.edu.au/~hartley/My-Papers.html)” (IEEE TPAMI, 1997). Main lesson: point normalization before solving the linear system dramatically improves conditioning and makes the eight-point method practical. [cse.unr.edu](https://www.cse.unr.edu/~bebis/CS485/Handouts/hartley.pdf?utm_source=chatgpt.com)
+
+- **Technical resource:** Stanford CS231A, “[Epipolar Geometry](https://web.stanford.edu/class/cs231a/course_notes/03-epipolar-geometry.pdf).” Read through the derivation of the epipolar constraint and the distinction between \(E\) and \(F\). [web.stanford.edu](https://web.stanford.edu/class/cs231a/course_notes/03-epipolar-geometry.pdf?utm_source=chatgpt.com)
+
+Before reading: review homogeneous coordinates, SVD, camera matrices, and the DLT idea from the previous session.
+
+### Practical implementation 
+
+Implement the **normalized eight-point algorithm** in PyTorch. This is a compact version of a real geometry-estimation component.
+
+Create `fundamental.py`:
+
+```python
+import torch
+
+def to_homogeneous(points: torch.Tensor) -> torch.Tensor:
+    """Convert [N, 2] points into [N, 3] homogeneous points."""
+    # TODO
+    raise NotImplementedError
+
+def normalize_points(points: torch.Tensor):
+    """
+    Normalize image points so their centroid is zero and their mean distance
+    from the origin is sqrt(2).
+
+    Return normalized points [N, 2] and transform T [3, 3], where:
+        x_normalized_h = T @ x_h
+    """
+    # TODO
+    raise NotImplementedError
+
+def estimate_fundamental_8point(
+    points1: torch.Tensor,
+    points2: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Estimate F such that x2.T @ F @ x1 = 0.
+
+    Requirements:
+    - N >= 8 corresponding [N, 2] points
+    - normalize both point sets before building A
+    - solve A f = 0 using SVD
+    - enforce rank(F) = 2
+    - denormalize and normalize F by its Frobenius norm
+    """
+    # TODO
+    raise NotImplementedError
+
+def sampson_error(
+    F: torch.Tensor,
+    points1: torch.Tensor,
+    points2: torch.Tensor,
+) -> torch.Tensor:
+    """Return one first-order geometric error per correspondence."""
+    # TODO
+    raise NotImplementedError
+```
+
+Create `test_fundamental.py`:
+
+```python
+import torch
+from fundamental import (
+    to_homogeneous,
+    normalize_points,
+    estimate_fundamental_8point,
+    sampson_error,
+)
+
+def test_normalization_properties():
+    points = torch.tensor(
+        [[10.0, 20.0], [50.0, 30.0], [20.0, 80.0], [90.0, 15.0]],
+        dtype=torch.float64,
+    )
+    normalized, _ = normalize_points(points)
+    assert torch.allclose(normalized.mean(dim=0), torch.zeros(2, dtype=torch.float64))
+    mean_distance = torch.linalg.vector_norm(normalized, dim=1).mean()
+    assert torch.allclose(mean_distance, torch.tensor(2.0**0.5), atol=1e-10)
+
+def test_estimated_fundamental_matrix_has_rank_two():
+    torch.manual_seed(7)
+    points1 = torch.rand(12, 2, dtype=torch.float64) * 640.0
+    points2 = points1 + torch.tensor([[-15.0, 0.0]], dtype=torch.float64)
+
+    F = estimate_fundamental_8point(points1, points2)
+    singular_values = torch.linalg.svdvals(F)
+
+    assert F.shape == (3, 3)
+    assert singular_values[-1] < 1e-9
+
+def test_epipolar_constraint_on_synthetic_rectified_pair():
+    torch.manual_seed(4)
+    points1 = torch.rand(16, 2, dtype=torch.float64) * 500.0
+    points2 = points1 + torch.tensor([[-20.0, 0.0]], dtype=torch.float64)
+
+    F = estimate_fundamental_8point(points1, points2)
+    x1 = to_homogeneous(points1)
+    x2 = to_homogeneous(points2)
+
+    residuals = torch.einsum("ni,ij,nj->n", x2, F, x1).abs()
+    assert residuals.max() < 1e-7
+
+def test_sampson_error_is_nonnegative():
+    points1 = torch.tensor([[100.0, 50.0], [120.0, 80.0]], dtype=torch.float64)
+    points2 = torch.tensor([[90.0, 50.0], [110.0, 80.0]], dtype=torch.float64)
+    F = estimate_fundamental_8point(
+        torch.cat([points1] * 4),
+        torch.cat([points2] * 4),
+    )
+    assert torch.all(sampson_error(F, points1, points2) >= 0)
+```
+
+Run:
+
+```bash
+python -m pytest -q
+```
+
+Debugging hints:
+
+- Use `float64`.
+- Be consistent with the convention $x_2^T F x_1=0$.
+- The last right-singular vector of $A$ is the solution for flattened $F$.
+- Enforce rank 2 by setting the smallest singular value of $F$ to zero.
+- The final test deliberately has repeated points; if it causes instability, explain why this is a bad estimator input and replace it with distinct correspondences for your own validation.
+
+Optional extension: add Gaussian pixel noise and compare the raw versus normalized eight-point algorithms by mean Sampson error.
+
+### Graduate-level questions 
+
+1. Why does a point in one image correspond to an epipolar line—not usually a point—in the second image?
+
+2. Explain why $F$ has rank 2. What does its null space represent geometrically?
+
+3. A stereo rig’s baseline doubles while its focal length and measurement noise remain fixed. How should expected depth accuracy change for distant points?
+
+4. For autonomous driving, why would RANSAC be paired with fundamental-matrix estimation? Name two likely outlier sources.
+
+### Review and progress tracking
+
+Key takeaways:
+
+- Two-view geometry converts correspondence from a 2D search to a 1D epipolar search.
+- $F$ applies to uncalibrated cameras; $E$ uses calibrated camera coordinates.
+- Point normalization is an algorithmic necessity, not merely a cosmetic preprocessing step.
+- Geometry estimation needs robust outlier handling in real scenes.
+
+Further reading: Stanford’s [epipolar-geometry lecture](https://web.stanford.edu/class/cs231a/lectures_2025/lecture5_epipolar_geometry.pdf).
